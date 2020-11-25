@@ -1,38 +1,445 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <title>Hello World</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+
+    <title>Space Maps</title>
     <style>
-        body { margin: 0; }
-        canvas { display: block; }
+        body {
+            margin:0;
+            font-family: sans-serif;
+            height: 100%;
+            background-color: #e2e4e8;
+            /*color: #333;*/
+        }
+        #header {
+            position: absolute;
+            top: 0; left: 0;
+            padding: 20px;
+            text-align: left;
+            color: gray;
+            font-size: 28px;
+        }
+        #container {
+            position: relative;  /* makes this the origin of its children */
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        #c {
+            width: 100%;  /* let our container decide our size */
+            height: 100%;
+            display: block;
+        }
+        #labels {
+            position: absolute;  /* let us position ourself inside the container */
+            z-index: 0;          /* make a new stacking context so children don't sort with rest of page */
+            left: 0;             /* make our position the top left of the container */
+            top: 0;
+            color: #333;
+        }
+        #labels>div {
+            position: absolute;  /* let us position them inside the container */
+            left: 0; top: 0;     /* make their default position the top left of the container */
+            cursor: pointer;     /* change the cursor to a hand when over us */
+            font-size: 14px;
+            letter-spacing: 0.1rem;
+            white-space: nowrap;
+            /*user-select: none;   !* don't let the text get selected *!*/
+            /*pointer-events: none;  !* make us invisible to the pointer *!*/
+            text-shadow:         /* create a black outline */
+                    -1px -1px 0 #e2e4e8,
+                     0   -1px 0 #e2e4e8,
+                     1px -1px 0 #e2e4e8,
+                     1px  0   0 #e2e4e8,
+                     1px  1px 0 #e2e4e8,
+                     0    1px 0 #e2e4e8,
+                    -1px  1px 0 #e2e4e8,
+                    -1px  0   0 #e2e4e8;
+        }
+        #labels>div:hover {
+            color: #1e90ff;
+        }
+
+        .label {
+            color: #FFF;
+            font-family: sans-serif;
+            padding: 2px;
+            background: rgba(0, 0, 0, .6);
+        }
     </style>
 </head>
 <body>
+
+<div id="container">
+    <canvas id="c"></canvas>
+    <div id="labels">
+    </div>
+</div>
+<div id="header">Space Maps</div>
+
 <script src="js/three.js"></script>
+<script src="js/controls/OrbitControls_custom.js"></script>
+<script src="js/renderers/CSS2DRenderer.js"></script>
+<script src="js/libs/dat.gui.min.js"></script>
+
 <script>
-    var scene = new THREE.Scene();
-    var camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
+    const AU = 1.0
+    const LD = 0.002569 * AU // lunar distance
+    const KM = AU / 149597870.7
+    const PC = AU * 206264.81
+    const LY = AU * 63241.08
+    const OVERSIZE = 25 // Exaggerate size, so we can see it!
+    const ENLARGE = 30
 
-    var renderer = new THREE.WebGLRenderer();
-    renderer.setSize( window.innerWidth, window.innerHeight );
-    document.body.appendChild( renderer.domElement );
+    const canvas = document.querySelector("#c");
 
-    var geometry = new THREE.BoxGeometry();
-    var material = new THREE.MeshBasicMaterial( { color: 0x00ff00 } );
-    var cube = new THREE.Mesh( geometry, material );
-    scene.add( cube );
+    const celestials = [];  // Holds elements to be considered by updateLabelsVisibility
+    const tempV = new THREE.Vector3(0,0,0); // used by updateLabelsVisibility
+    const raycaster = new THREE.Raycaster();  // used by updateLabelsVisibility
 
-    camera.position.z = 5;
 
-    var animate = function () {
-        requestAnimationFrame( animate );
+    function toRad(deg) { return THREE.MathUtils.degToRad(deg) }
 
-        cube.rotation.x += 0.01;
-        cube.rotation.y += 0.01;
+    function V(x, y, z) { return new THREE.Vector3(x, y, z) }
 
-        renderer.render( scene, camera );
-    };
+    const XV = V(1,0,0)
+    const YV = V(0,1,0)
+    const ZV = V(0,0,1)
 
-    animate();
+
+    function rotate(obj, axisV, deg) {
+        let cur = obj.quaternion
+        let rot = new THREE.Quaternion().setFromAxisAngle(axisV, toRad(deg))
+        cur.multiplyQuaternions(rot, cur)
+        return obj
+    }
+
+    function makeLabel(text) {
+        const div = document.createElement( 'div' );
+        div.className = 'label';
+        div.textContent = text;
+        div.style.marginTop = '-1em';
+        return new THREE.CSS2DObject(div);
+    }
+
+    function setLabel(labeled, label, position) {
+        if(position) {
+            const [x,y,z] = position;
+            label.position.set(x,y,z);
+        }
+        labeled.add(label);
+        labeled.userData.label = label;
+    }
+
+
+    function line(start, end, color) {
+        return new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(
+                [new THREE.Vector3(start[0],start[1],start[2]), new THREE.Vector3(end[0],end[1],end[2]) ] ),
+                new THREE.LineBasicMaterial({color: color}) );
+    }
+
+    function sphere(location, radius, color, name="") {
+        const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(radius, 32, 32),
+            new THREE.MeshPhongMaterial({color: color}))
+            .translateX(location[0])
+            .translateY(location[1])
+            .translateZ(location[2])
+        mesh.name = name
+        return mesh
+    }
+
+    function circle(radius, color) {
+        let segments = radius < 1 ? 36 : 36 * radius
+        let cg = new THREE.CircleGeometry(radius, segments);
+        cg.vertices.splice(0, 1);
+        return new THREE.LineLoop(cg, new THREE.LineBasicMaterial({color: color}));
+    }
+
+    function disc(radius, color) {
+        let segments = radius < 1 ? 36 : 36 * radius
+        let cg = new THREE.CircleGeometry(radius, segments);
+        return new THREE.Mesh(cg, new THREE.MeshBasicMaterial({color: color}));
+    }
+
+    function setProps(obj, orbitRadius, orbitSpeed, orbitAngle=0) {
+        obj.userData.orbitRadius = orbitRadius
+        obj.userData.orbitSpeed = orbitSpeed // in degrees? pr time?
+        obj.userData.orbitAngle = orbitAngle   // how far the orbit has come
+        return obj
+    }
+
+
+    function updateOrbit (obj) {
+        const ud = obj.userData
+        ud.orbitAngle += ud.orbitSpeed
+        obj.position.x = ud.orbitRadius * Math.cos(ud.orbitAngle)
+        obj.position.z = ud.orbitRadius * Math.sin(ud.orbitAngle) * -1
+        return obj
+    }
+
+
+    function makeScene() {
+        const scene = new THREE.Scene();
+        scene.background = null;
+        // scene.add(new THREE.AxesHelper(10));
+        return scene
+    }
+
+
+    function makeCamera() {
+        // TODO: Look into the first arg here! Is 60 better?
+        let camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, LD, LY);
+        camera.position.set(-3*AU, .5*AU, 3*AU);
+        camera.lookAt(0,0,0);
+        return camera
+    }
+
+    function setLights(scene) {
+        const lighting = new THREE.DirectionalLight("white", 0.7);
+        lighting.position.set(-1, 2, 6);
+        scene.add(lighting);
+
+        const glow = new THREE.AmbientLight("white", 0.7);
+        scene.add(glow);
+
+        const sunlight = new THREE.PointLight("white", 0.7);
+        sunlight.position.set(0,0,2);
+        scene.add(sunlight);
+        return scene
+    }
+
+    function makeRenderer() {
+        let renderer = new THREE.WebGLRenderer({canvas: canvas, antialias: true, alpha: true});
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        return renderer
+    }
+
+    function makeLabelRenderer() {
+        const labelRenderer = new THREE.CSS2DRenderer();
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.domElement.style.position = 'absolute';
+        labelRenderer.domElement.style.top = '0px';
+        document.body.appendChild(labelRenderer.domElement);
+        return labelRenderer
+    }
+
+    // function setAxis(scene) {
+    //     scene.add(line([1,0,0], [5,0,0], 0x0000ff));  // x axis
+    //     scene.add(line([0,1,0], [0,5,0], 0x00ff00));  // y axis
+    //     scene.add(line([0,0,1], [0,0,5], 0xff0000));  // z axis
+    //
+    // }
+
+    function makeDisc(radius, color) {
+        const geometry = new THREE.CylinderGeometry( radius, radius, 0.0001, 36 );
+        const material = new THREE.MeshPhongMaterial( {color: color, transparent: true, opacity: 0.5} );
+        return new THREE.Mesh( geometry, material );
+    }
+
+
+    function makeGalacticPlane() {
+        const r = 10*AU
+        const c = 0xccaaaa
+        const plane = new THREE.Group();
+        // plane.add(makeDisc(r, c))
+        // plane.add(new THREE.PolarGridHelper(r, 36, 3, 64, 0xff6666, 0xffbbbb))
+        plane.add(new THREE.PolarGridHelper(r, 36, 10, 64, c, c))
+        plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,0), r, c))
+        plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,0,0), r/2, c))
+        // plane.add(new THREE.AxesHelper(10));
+
+        const point = new THREE.Group();
+        point.add(plane)
+        point.userData["plane"] = plane;
+        return point
+    }
+
+    function makeEclipticPlane() {
+        const r = AU
+        const c = 0x99cc99
+        const plane = new THREE.Group();
+        // plane.add(makeDisc(r, "green"))
+        plane.add(new THREE.PolarGridHelper(r, 36, 5, 64, c,c))
+        plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,0), r, "green"))
+        plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,0,0), r/2, "green"))
+        // plane.add(new THREE.AxesHelper(10));
+        const point = new THREE.Group();
+        point.add(plane)
+        point.userData["plane"] = plane;
+        return point
+    }
+
+    function makeEquatorialPlane() {
+        const r = 0.5*AU
+        const c = 0x9999cc
+        const plane = new THREE.Group();
+        // plane.add(makeDisc(r, "blue"))
+        plane.add(new THREE.PolarGridHelper(r, 36, 5, 36, c, c))
+        plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,0), r, "blue"))
+        plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,0,0), r/2, "blue"))
+        // plane.add(new THREE.AxesHelper(10));
+        const point = new THREE.Group();
+        point.add(plane)
+        point.userData["plane"] = plane;
+        return point
+    }
+
+
+    function makeSun() {
+        const r = 695700*KM * OVERSIZE;
+        const sun = sphere([0, 0, 0], r, 0xcc9933, "Sun");
+        setLabel(sun, makeLabel("Sol"), [0,r,0]);
+        return sun
+    }
+
+    function makeEarth() {
+        const r = 6371*KM * OVERSIZE*ENLARGE;
+        const earth = sphere([0, 0,0], r, 0x4466cc, "Earth")
+        setLabel(earth, makeLabel("Earth"), [0,r,0]);
+        setProps(earth, 2, 0.01)
+        earth.material.map = new THREE.TextureLoader().load("img/earthmap1k.jpg")
+        // earth.rotation.y+=1
+        // scene.add(circle(2, "gray"))  // earth's path
+        return earth
+    }
+
+    function makeMoon() {
+        const ld = LD*OVERSIZE;
+        const r = 1737*KM * OVERSIZE*ENLARGE;
+        const moon = sphere([ld, 0, 0], r, "gray", "Moon")
+        setLabel(moon, makeLabel("Moon"), [0,r,0]);
+        setProps(moon, ld, 0.1)
+        return moon
+    }
+
+    const camera = makeCamera()
+
+    const scene = makeScene()
+    setLights(scene)
+
+    const renderer = makeRenderer()
+
+    const labelRenderer = makeLabelRenderer();
+
+    const galactic = makeGalacticPlane()
+    scene.add(galactic)
+
+    const ecliptic = makeEclipticPlane()
+    rotate(ecliptic, XV, -62)
+    rotate(ecliptic, YV, 90)
+    galactic.add(ecliptic)
+
+    const sun = makeSun()
+    ecliptic.add(sun)
+    celestials.push(sun)
+
+    const equatorial = makeEquatorialPlane().translateZ(-AU)
+    rotate(equatorial, ZV, 5)
+    ecliptic.add(equatorial)
+
+
+    const earth = makeEarth()
+    equatorial.add(earth)
+    celestials.push(earth)
+
+    const moon = makeMoon()
+    equatorial.add(moon)
+    celestials.push(moon)
+
+
+
+    // Note: control-keys inverted in source to make pan default and rotate override
+    const controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
+    controls.minDistance = LD;
+    controls.maxDistance = LY;
+
+
+    // function for updating positions based on absolute datetime
+    const updatePositions = function() {
+        // sun.rotation.z += 0.1;
+        // earth.rotation.z += 0.1
+        // updateOrbit(earth)
+        updateOrbit(moon)
+    }
+
+    function updateLabelsVisibility() {
+        // Shows / hides labels depending on the visiblity of the object they are labeling.
+        // Based on:
+        // https://threejsfundamentals.org/threejs/lessons/threejs-align-html-elements-to-3d.html
+
+        celestials.forEach((labeled) => {
+            const label = labeled.userData.label;
+            if (!label) { return; }
+            // Get the position of the center of the cube
+            labeled.updateWorldMatrix(true, false);
+            labeled.getWorldPosition(tempV);
+            // Get the normalized screen coordinate of that position
+            tempV.project(camera);
+            // Ask the raycaster for all the objects that intersect from the eye toward this object's position
+            raycaster.setFromCamera(tempV, camera);
+            const intersectedObjects = raycaster.intersectObjects(celestials);
+            // We're visible if the first intersection is this object.
+            label.visible = intersectedObjects.length && labeled === intersectedObjects[0].object;
+        });
+    }
+
+
+    // mechanism for pacing position updates
+    let tickInterval = 1.0; // seconds
+    let previousTick = 0
+    function tick(timestamp, tickFn){
+        if (timestamp > previousTick + tickInterval) {
+            previousTick = timestamp;
+            tickFn()
+        }
+    }
+
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    }
+    window.addEventListener('resize', onWindowResize, false);
+
+
+    // http://learningthreejs.com/blog/2011/08/14/dat-gui-simple-ui-for-demos/
+    // https://github.com/mrdoob/three.js/blob/dev/examples/jsm/libs/dat.gui.module.js
+    const gui = new dat.GUI({height : 5 * 32 - 1});
+    gui.add(galactic.userData.plane, "visible").name("Galactic Plane")
+    gui.add(ecliptic.userData.plane, "visible").name("Ecliptic Plane (Heliocentric)")
+    gui.add(equatorial.userData.plane, "visible").name("Equatorial Plane (Geocentric)")
+    gui.add({reset: controls.reset}, "reset").name("Reset view")
+    // const params = {something: 5000, width:200}
+    // gui.add(params, "something").name("Some thing")
+    // gui.add(params, "width").min(128).max(256).step(16)
+
+
+    function main() {
+
+        // animation loop
+        function render(time) {
+            time *= 0.001;  // convert time to seconds
+
+            tick(time, updatePositions)
+
+            controls.update();  // this call prevents labels from jittering when rotating
+            renderer.render(scene, camera);
+            updateLabelsVisibility();
+            labelRenderer.render(scene, camera);
+
+            requestAnimationFrame(render); // recur
+        }
+        requestAnimationFrame(render); // start render loop
+    }
+    main();
+
 </script>
 </body>
 </html>
