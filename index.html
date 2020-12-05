@@ -32,36 +32,7 @@
             height: 100%;
             display: block;
         }
-        #labels {
-            position: absolute;  /* let us position ourself inside the container */
-            z-index: 0;          /* make a new stacking context so children don't sort with rest of page */
-            left: 0;             /* make our position the top left of the container */
-            top: 0;
-            color: #333;
-        }
-        #labels>div {
-            position: absolute;  /* let us position them inside the container */
-            left: 0; top: 0;     /* make their default position the top left of the container */
-            cursor: pointer;     /* change the cursor to a hand when over us */
-            font-size: 14px;
-            letter-spacing: 0.1rem;
-            white-space: nowrap;
-            /*user-select: none;   !* don't let the text get selected *!*/
-            /*pointer-events: none;  !* make us invisible to the pointer *!*/
-            text-shadow:         /* create a black outline */
-                    -1px -1px 0 #e2e4e8,
-                     0   -1px 0 #e2e4e8,
-                     1px -1px 0 #e2e4e8,
-                     1px  0   0 #e2e4e8,
-                     1px  1px 0 #e2e4e8,
-                     0    1px 0 #e2e4e8,
-                    -1px  1px 0 #e2e4e8,
-                    -1px  0   0 #e2e4e8;
-        }
-        #labels>div:hover {
-            color: #1e90ff;
-        }
-
+        /* .label added dynamically */
         .label {
             color: #FFF;
             font-family: sans-serif;
@@ -74,8 +45,6 @@
 
 <div id="container">
     <canvas id="c"></canvas>
-    <div id="labels">
-    </div>
 </div>
 <div id="header">Space Maps</div>
 
@@ -116,6 +85,26 @@
         return obj
     }
 
+
+    let helvetica_regular;
+    function loadTypefaces(main_fn) {
+        const loader = new THREE.FontLoader();
+        loader.load(
+            // resource URL
+            'fonts/helvetiker_regular.typeface.json',
+            // onLoad callback
+            function ( typeface ) {
+                helvetica_regular = typeface;
+                main_fn();
+                },
+            // onProgress callback
+            undefined,
+            // onError callback
+            function ( err ) { console.error( 'Loading font failed', err ); }
+        );
+    }
+
+
     function makeLabel(text) {
         const div = document.createElement( 'div' );
         div.className = 'label';
@@ -123,6 +112,7 @@
         div.style.marginTop = '-1em';
         return new THREE.CSS2DObject(div);
     }
+
 
     function setLabel(labeled, label, position) {
         if(position) {
@@ -141,6 +131,7 @@
                 new THREE.LineBasicMaterial({color: color}) );
     }
 
+
     function sphere(location, radius, color, name="") {
         const mesh = new THREE.Mesh(
             new THREE.SphereGeometry(radius, 32, 32),
@@ -152,6 +143,7 @@
         return mesh
     }
 
+
     function circle(radius, color) {
         let segments = radius < 1 ? 36 : 36 * radius
         let cg = new THREE.CircleGeometry(radius, segments);
@@ -159,11 +151,13 @@
         return new THREE.LineLoop(cg, new THREE.LineBasicMaterial({color: color}));
     }
 
+
     function disc(radius, color) {
         let segments = radius < 1 ? 36 : 36 * radius
         let cg = new THREE.CircleGeometry(radius, segments);
         return new THREE.Mesh(cg, new THREE.MeshBasicMaterial({color: color}));
     }
+
 
     function setProps(obj, orbitRadius, orbitSpeed, orbitAngle=0) {
         obj.userData.orbitRadius = orbitRadius
@@ -192,8 +186,8 @@
 
     function makeCamera() {
         // TODO: Look into the first arg here! Is 60 better?
-        let camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, LD, LY);
-        camera.position.set(-3*AU, .5*AU, 3*AU);
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, LD, LY);
+        camera.position.set(-3.5*AU, 2.5*AU, 3.5*AU);
         camera.lookAt(0,0,0);
         return camera
     }
@@ -228,17 +222,75 @@
         return labelRenderer
     }
 
-    // function setAxis(scene) {
-    //     scene.add(line([1,0,0], [5,0,0], 0x0000ff));  // x axis
-    //     scene.add(line([0,1,0], [0,5,0], 0x00ff00));  // y axis
-    //     scene.add(line([0,0,1], [0,0,5], 0xff0000));  // z axis
-    //
-    // }
 
-    function makeDisc(radius, color) {
-        const geometry = new THREE.CylinderGeometry( radius, radius, 0.0001, 36 );
-        const material = new THREE.MeshPhongMaterial( {color: color, transparent: true, opacity: 0.5} );
-        return new THREE.Mesh( geometry, material );
+    function makeTriangle(w,h,c,o) {
+        const tr = new THREE.Shape()
+        tr.moveTo(0,0)
+        tr.lineTo(w/2,0)
+        tr.lineTo(0,h)
+        tr.lineTo(-w/2,0)
+        tr.lineTo(0,0)
+
+        return new THREE.Mesh(
+            new THREE.ShapeGeometry(tr),
+            new THREE.MeshBasicMaterial({color: c, side: THREE.DoubleSide, opacity: o, transparent: true}))
+    }
+
+
+    function makeText(text, size, color, opacity=1) {
+        const mat =  new THREE.MeshBasicMaterial({color: color, side: THREE.DoubleSide, opacity: opacity, transparent: true})
+        const geo = new THREE.ShapeBufferGeometry(helvetica_regular.generateShapes(text, size));
+        geo.computeBoundingBox();
+        const w = geo.boundingBox.max.x - geo.boundingBox.min.x;
+        geo.translate(-0.5*w, 0, 0);
+        return new THREE.Mesh(geo, mat);
+    }
+
+
+    function makePlane(innerRadius, color, label, zeroLabel) {
+        // https://en.wikipedia.org/wiki/Celestial_coordinate_system
+        const inner = innerRadius;
+        const outer = innerRadius*1.5;
+
+        const disc = new THREE.Mesh(
+            new THREE.RingGeometry(inner, outer, 72),
+            new THREE.MeshBasicMaterial({color: color, side: THREE.DoubleSide, opacity: 0.05, transparent: true}));
+
+        [[0,1], [180,-1]].forEach(([deg,r]) => {
+            let lr = makeText(label, .08*inner, color, .15);
+            lr.position.set(0, r*.9*outer, 0);
+            lr.rotateZ(toRad(deg));
+            disc.add(lr);
+        });
+
+        [[0,[0,1]],[90,[-1,0]],[180,[0,-1]],[270,[1,0]]].forEach(([deg,[x,y]]) => {
+            let t = makeTriangle(.3*inner,.25*inner, color, .05)
+            let offset = outer;
+            t.position.set(x*offset, y*offset,0)
+            t.rotateZ(toRad(deg))
+            disc.add(t);
+
+            t = makeText(String(deg), .08*inner, color, .25);
+            offset = outer-.16*inner;
+            t.position.set(x*offset, y*offset,0)
+            t.rotateZ(toRad(deg))
+            disc.add(t);
+        });
+
+        if(zeroLabel) {
+            let t0 = makeText(zeroLabel, .06*inner, color, .3);
+            t0.position.set(0, 1.3*outer,0);
+            disc.add(t0);
+        }
+
+        disc.rotateX(toRad(-90));
+        const plane = new THREE.Group();
+        plane.add(disc);
+
+        // plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,-outer+head), head*2, color, head, head/3));  // 0 degrees
+        // plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,inner/10,0), inner/5, color))  // north
+
+        return plane;
     }
 
 
@@ -246,43 +298,32 @@
         const r = 10*AU
         const c = 0xccaaaa
         const plane = new THREE.Group();
-        // plane.add(makeDisc(r, c))
-        // plane.add(new THREE.PolarGridHelper(r, 36, 3, 64, 0xff6666, 0xffbbbb))
-        plane.add(new THREE.PolarGridHelper(r, 36, 10, 64, c, c))
-        plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,0), r, c))
-        plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,0,0), r/2, c))
-        // plane.add(new THREE.AxesHelper(10));
-
+        plane.add(makePlane(2, "red", "\ngalactic plane\n", "galactic core\n  (27000 LY)"))
         const point = new THREE.Group();
         point.add(plane)
         point.userData["plane"] = plane;
+        // point.add(new THREE.AxesHelper(3));
         return point
     }
+
 
     function makeEclipticPlane() {
-        const r = AU
-        const c = 0x99cc99
+        const r = .95*AU
+        const c = "green"
         const plane = new THREE.Group();
-        // plane.add(makeDisc(r, "green"))
-        plane.add(new THREE.PolarGridHelper(r, 36, 5, 64, c,c))
-        plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,0), r, "green"))
-        plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,0,0), r/2, "green"))
-        // plane.add(new THREE.AxesHelper(10));
+        plane.add(makePlane(r, c, "\necliptic plane\n(heliocentric)", " \nvernal equinox"))
         const point = new THREE.Group();
         point.add(plane)
         point.userData["plane"] = plane;
         return point
     }
+
 
     function makeEquatorialPlane() {
         const r = 0.5*AU
-        const c = 0x9999cc
+        const c = "blue"
         const plane = new THREE.Group();
-        // plane.add(makeDisc(r, "blue"))
-        plane.add(new THREE.PolarGridHelper(r, 36, 5, 36, c, c))
-        plane.add(new THREE.ArrowHelper(V(0,0,-1), V(0,0,0), r, "blue"))
-        plane.add(new THREE.ArrowHelper(V(0,1,0), V(0,0,0), r/2, "blue"))
-        // plane.add(new THREE.AxesHelper(10));
+        plane.add(makePlane(r, c, "\nEquatorial plane\n"))
         const point = new THREE.Group();
         point.add(plane)
         point.userData["plane"] = plane;
@@ -293,79 +334,36 @@
     function makeSun() {
         const r = 695700*KM * OVERSIZE;
         const sun = sphere([0, 0, 0], r, 0xcc9933, "Sun");
-        setLabel(sun, makeLabel("Sol"), [0,r,0]);
+        setLabel(sun, makeLabel("Sol"), [0,r,r]);
         return sun
     }
 
+
     function makeEarth() {
         const r = 6371*KM * OVERSIZE*ENLARGE;
-        const earth = sphere([0, 0,0], r, 0x4466cc, "Earth")
-        setLabel(earth, makeLabel("Earth"), [0,r,0]);
+        const earth = new THREE.Group();
+        const globe = sphere([0, 0,0], r, 0x4466cc, "Earth")
+        setLabel(earth, makeLabel("Earth"), [0,r,r]);
         setProps(earth, 2, 0.01)
-        earth.material.map = new THREE.TextureLoader().load("img/earthmap1k.jpg")
+        globe.material.map = new THREE.TextureLoader().load("img/earthmap1k.jpg")
         // earth.rotation.y+=1
         // scene.add(circle(2, "gray"))  // earth's path
+        // earth.add(new THREE.AxesHelper(.8*AU));
+        earth.add(globe)
+        earth.userData.globe = globe
         return earth
     }
+
 
     function makeMoon() {
         const ld = LD*OVERSIZE;
         const r = 1737*KM * OVERSIZE*ENLARGE;
         const moon = sphere([ld, 0, 0], r, "gray", "Moon")
-        setLabel(moon, makeLabel("Moon"), [0,r,0]);
+        setLabel(moon, makeLabel("Moon"), [0,r,r]);
         setProps(moon, ld, 0.1)
         return moon
     }
 
-    const camera = makeCamera()
-
-    const scene = makeScene()
-    setLights(scene)
-
-    const renderer = makeRenderer()
-
-    const labelRenderer = makeLabelRenderer();
-
-    const galactic = makeGalacticPlane()
-    scene.add(galactic)
-
-    const ecliptic = makeEclipticPlane()
-    rotate(ecliptic, XV, -62)
-    rotate(ecliptic, YV, 90)
-    galactic.add(ecliptic)
-
-    const sun = makeSun()
-    ecliptic.add(sun)
-    celestials.push(sun)
-
-    const equatorial = makeEquatorialPlane().translateZ(-AU)
-    rotate(equatorial, ZV, 5)
-    ecliptic.add(equatorial)
-
-
-    const earth = makeEarth()
-    equatorial.add(earth)
-    celestials.push(earth)
-
-    const moon = makeMoon()
-    equatorial.add(moon)
-    celestials.push(moon)
-
-
-
-    // Note: control-keys inverted in source to make pan default and rotate override
-    const controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
-    controls.minDistance = LD;
-    controls.maxDistance = LY;
-
-
-    // function for updating positions based on absolute datetime
-    const updatePositions = function() {
-        // sun.rotation.z += 0.1;
-        // earth.rotation.z += 0.1
-        // updateOrbit(earth)
-        updateOrbit(moon)
-    }
 
     function updateLabelsVisibility() {
         // Shows / hides labels depending on the visiblity of the object they are labeling.
@@ -406,22 +404,73 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         labelRenderer.setSize(window.innerWidth, window.innerHeight);
     }
-    window.addEventListener('resize', onWindowResize, false);
 
 
-    // http://learningthreejs.com/blog/2011/08/14/dat-gui-simple-ui-for-demos/
-    // https://github.com/mrdoob/three.js/blob/dev/examples/jsm/libs/dat.gui.module.js
-    const gui = new dat.GUI({height : 5 * 32 - 1});
-    gui.add(galactic.userData.plane, "visible").name("Galactic Plane")
-    gui.add(ecliptic.userData.plane, "visible").name("Ecliptic Plane (Heliocentric)")
-    gui.add(equatorial.userData.plane, "visible").name("Equatorial Plane (Geocentric)")
-    gui.add({reset: controls.reset}, "reset").name("Reset view")
-    // const params = {something: 5000, width:200}
-    // gui.add(params, "something").name("Some thing")
-    // gui.add(params, "width").min(128).max(256).step(16)
+    const camera = makeCamera()
 
+    const scene = makeScene()
+    setLights(scene)
+
+    const renderer = makeRenderer()
+
+    const labelRenderer = makeLabelRenderer();
+
+    let galactic, ecliptic, equatorial, sun, earth, moon, controls, gui;
 
     function main() {
+
+
+        galactic = makeGalacticPlane()
+        scene.add(galactic)
+
+        ecliptic = makeEclipticPlane()
+        rotate(ecliptic, XV, -62)
+        rotate(ecliptic, YV, 90)
+        galactic.add(ecliptic)
+
+        equatorial = makeEquatorialPlane().translateZ(-AU)
+        rotate(equatorial, ZV, 5)
+        ecliptic.add(equatorial)
+
+        sun = makeSun()
+        ecliptic.add(sun)
+        celestials.push(sun)
+
+        earth = makeEarth()
+        equatorial.add(earth)
+        celestials.push(earth.userData.globe)
+
+        moon = makeMoon()
+        equatorial.add(moon)
+        celestials.push(moon)
+
+        // Note: control-keys inverted in source to make pan default and rotate override
+        controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
+        controls.minDistance = LD;
+        controls.maxDistance = LY;
+
+
+        window.addEventListener('resize', onWindowResize, false);
+
+        // http://learningthreejs.com/blog/2011/08/14/dat-gui-simple-ui-for-demos/
+        // https://github.com/mrdoob/three.js/blob/dev/examples/jsm/libs/dat.gui.module.js
+        gui = new dat.GUI({height : 5 * 32 - 1});
+        // galactic.userData.plane.visible = false;
+        gui.add(galactic.userData.plane, "visible").name("Galactic plane")
+        gui.add(ecliptic.userData.plane, "visible").name("Ecliptic plane (heliocentric)")
+        equatorial.userData.plane.visible = false;
+        gui.add(equatorial.userData.plane, "visible").name("Equatorial plane (geocentric)")
+        gui.add({reset: controls.reset}, "reset").name("Reset view")
+
+
+        // function for updating positions based on absolute datetime
+        const updatePositions = function() {
+            // sun.rotation.z += 0.1;
+            // earth.userData.globe.rotation.y += 0.2
+            // updateOrbit(earth)
+            updateOrbit(moon)
+        }
+
 
         // animation loop
         function render(time) {
@@ -438,7 +487,8 @@
         }
         requestAnimationFrame(render); // start render loop
     }
-    main();
+
+    loadTypefaces(main);
 
 </script>
 </body>
