@@ -15,7 +15,7 @@
             margin:0;
             font-family: sans-serif;
             height: 100%;
-            background-color: #e2e4e8;
+            background-color: rgba(247, 248, 249, 1)
             /*color: #333;*/
         }
         #header {
@@ -39,10 +39,21 @@
         }
         /* .label added dynamically */
         .label {
-            color: #FFF;
+            color: #5391f4;
             font-family: sans-serif;
+            font-size: 16px;
             padding: 2px;
-            background: rgba(0, 0, 0, .6);
+            /*background: rgba(247, 248, 249, .2);*/
+            cursor: pointer;     /* change the cursor to a hand when over us */
+        }
+        .label:hover {
+            color: #7da6e7;
+        }
+        .star {
+            font-size: 20px;
+        }
+        .moon {
+            font-size: 14px;
         }
 
         div#date {
@@ -69,6 +80,9 @@
     <script src="js/renderers/CSS2DRenderer.js"></script>
     <script src="js/libs/dat.gui.min.js"></script>
 
+    <!-- https://github.com/tweenjs/tween.js -->
+    <script src="js/tween.umd.js"></script>
+
     <script src="js/astronomy.js"></script>
 
 </head>
@@ -86,6 +100,7 @@
 
 
 <script>
+
     // const KM = AU / 149597870.7
     const KM = 1.0;
     // const AU = 149597870.0
@@ -105,9 +120,11 @@
     const tempV = new THREE.Vector3(0,0,0); // used by updateLabelsVisibility
     const raycaster = new THREE.Raycaster();  // used by updateLabelsVisibility
 
-    const guiParams = {bodyScale: 100}
+    const guiParams = {bodyScale: 250}
 
     function toRad(deg) { return THREE.MathUtils.degToRad(deg) }
+
+    function km2au(km) { return km / AU; }
 
     function V(x, y, z) { return new THREE.Vector3(x, y, z) }
 
@@ -133,23 +150,25 @@
             // resource URL
             'fonts/helvetiker_regular.typeface.json',
             // onLoad callback
-            function ( typeface ) {
+            function (typeface) {
                 helvetica_regular = typeface;
                 main_fn();
                 },
             // onProgress callback
             undefined,
             // onError callback
-            function ( err ) { console.error( 'Loading font failed', err ); }
+            function (err) { console.error('Loading font failed', err); }
         );
     }
 
 
-    function makeLabel(text) {
-        const div = document.createElement( 'div' );
+    function makeLabel(text, type, clickFn) {
+        const div = document.createElement('div');
         div.className = 'label';
+        if(type){ div.classList.add(type); }
         div.textContent = text;
         div.style.marginTop = '-1em';
+        if(clickFn) { div.addEventListener('click', clickFn); }
         return new THREE.CSS2DObject(div);
     }
 
@@ -221,12 +240,23 @@
         return scene
     }
 
+    const cameraViews = {
+        core: {
+            position: V(0, 0, 1000*AU),
+            target: V(-27000*LY, 0, 0)
+        },
+        reset: {
+            position: {x: -3.5*AU, y: 2.5*AU, z:3.5*AU},
+            target:   {x:0, y:0, z:0}
+        }
+    };
 
     function makeCamera() {
         // TODO: Look into the first arg here! Is 60 better?
         const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, LD, LY);
-        camera.position.set(-3.5*AU, 2.5*AU, 3.5*AU);
-        camera.lookAt(0,0,0);
+        const v = cameraViews.core.position
+        camera.position.set(v.x, v.y, v.z);
+        camera.lookAt(cameraViews.core.position);
         return camera
     }
 
@@ -462,39 +492,30 @@
         const globe = new THREE.Mesh(geometry, material);
 
         const group = new THREE.Group();
-        setLabel(group, makeLabel(d.label), [0,d.radius*10,d.radius*10]);
-        group.add(globe)
-        group.userData.globe = globe
-        group.userData.type = d.type
+
+        const clicked = ()=>{console.log("Clicked: " + d.label);}  // TODO: Something sensible here
+        setLabel(globe, makeLabel(d.label,d.type, clicked), [0,d.radius*1.05,d.radius*1.05]);
+        group.add(globe);
+        group.userData.globe = globe;
+        group.userData.type = d.type;
 
         if(d.type === "moon") {
-            group.userData.cartesianFn = (day) => {
-                const c = astronony_bodies["Moon"].GeocentricCoordinates(day);
-                // console.log("Moon1: " + c)
-                // const ld = LD;
-                // const ld1 = ld / 2;
-                // c.x /= ld; c.y /= ld; c.z /= ld;  // divide because ld is also a fraction
-                // console.log("Moon2: " + c)
-                return c
-            }
+            group.userData.positionFn = (day) => { return astronony_bodies[key].GeocentricCoordinates(day); }
         } else {
-            group.userData.cartesianFn = (day) => { return astronony_bodies[key].EclipticCartesianCoordinates(day); }
+            group.userData.positionFn = (day) => { return astronony_bodies[key].EclipticCartesianCoordinates(day); }
         }
 
-        if(d.type !== "star") {
-            labeledElems.push(group.userData.globe)
-        }
-        positionedElems.push(group)
+        if(d.type !== "star") { positionedElems.push(group); }
+        labeledElems.push(globe)
         scaledElems.push(group)
-
+        // group.add(THREE.AxisHelper(d.radius*200))
         return group
     }
 
 
     function updateLabelsVisibility() {
         // Shows / hides labels depending on the visibility of the object they are labeling.
-        // Based on:
-        // https://threejsfundamentals.org/threejs/lessons/threejs-align-html-elements-to-3d.html
+        // Based on: https://threejsfundamentals.org/threejs/lessons/threejs-align-html-elements-to-3d.html
 
         labeledElems.forEach((labeled) => {
             const label = labeled.userData.label;
@@ -504,6 +525,17 @@
             labeled.getWorldPosition(tempV);
             // Get the normalized screen coordinate of that position
             tempV.project(camera);
+
+            const type = labeled.parent.userData.type
+            if (type === "planet" && Math.abs(tempV.z) > .99999) {
+                // console.debug("type: "+ type + ", z:" + Math.abs(tempV.z))
+                label.visible = false;
+                return;
+            }
+            if (type === "moon" && Math.abs(tempV.z) > .95) {
+                label.visible = false;
+                return;
+            }
             // Ask the raycaster for all the objects that intersect from the eye toward this object's position
             raycaster.setFromCamera(tempV, camera);
             const intersectedObjects = raycaster.intersectObjects(labeledElems);
@@ -538,28 +570,65 @@
     let currentDate;
 
     function updatePositions(date) {
-        if(date) {
-            currentDate = date;
-        }
+        if(date) { currentDate = date; }
         const day = Astronomy.DayValue(currentDate);
-        console.debug("updatePositions: " + date + " -> day: " + day)
+        // console.debug("updatePositions: " + date + " -> day: " + day)
 
         positionedElems.forEach((b) => {
-            const f = b.userData.cartesianFn;
+            const f = b.userData.positionFn;
             if(!f) { return; }
             const coord = f(day)
             const factor = b.userData.type === "moon" ? LD * guiParams.bodyScale * 25: AU;
             b.position.set(coord.y*factor, coord.z*factor, coord.x*factor) // alter coord ordering for our system (y->north)
-
         });
     }
 
 
-    let scale;
+    function tween(pos, target, millis=1000) {
+        new TWEEN.Tween(pos).to(target, millis).easing(TWEEN.Easing.Cubic.InOut).start();
+    }
+
+
+    function tweenTo(positionTo, lookAt, millis=1000) {
+        tween(camera.position, positionTo, millis);
+        if (lookAt) {
+            tween(controls.target, lookAt, millis);
+        }
+    }
+
+
+    function toPlanet(planet) {
+        const lookTarget = V(0,0,0);
+        const posTarget = V(0,0,0);
+
+        planet.getWorldPosition(lookTarget)
+
+        const radius = planet.userData.globe.scale.x * planet.userData.globe.geometry.parameters.radius
+        const sph = sphere([0,0,radius*5], 10000*KM, "red")
+        planet.add(sph)
+        sph.getWorldPosition(posTarget)
+        planet.remove(sph)
+        tweenTo(posTarget,lookTarget)
+        controls.saveState()
+    }
+
+
+    function resetView(millis=1000) {
+        tweenTo(cameraViews.reset.position, cameraViews.reset.target, millis);
+    }
+
+
+    function scaleBodies(v) {
+        scaledElems.forEach((elem) => {
+            const scale = elem.userData.globe.scale
+            const v1 = elem.userData["type"] === "star" ? (v-1)/25+1 : v;
+            scale.x = v1; scale.y = v1; scale.z = v1;
+        })
+        updatePositions();  // to ensure moves out from planet
+    }
 
 
     function main() {
-
 
         galactic = makePlane("Galactic")
         scene.add(galactic)
@@ -606,15 +675,6 @@
         pluto = makeGlobe("Pluto")
         ecliptic.add(pluto)
 
-
-        function scaleBodies(v) {
-            scaledElems.forEach((elem) => {
-                const scale = elem.userData.globe.scale
-                const v1 = elem.userData["type"] === "star" ? (v-1)/25+1 : v;
-                scale.x = v1; scale.y = v1; scale.z = v1;
-            })
-        }
-
         updatePositions(new Date());
         scaleBodies(guiParams.bodyScale);
 
@@ -622,28 +682,36 @@
         controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
         controls.minDistance = LD;
         controls.maxDistance = LY;
+        setTimeout(()=>{ resetView(3000); }, 1000)
 
         window.addEventListener('resize', onWindowResize, false);
 
         // http://learningthreejs.com/blog/2011/08/14/dat-gui-simple-ui-for-demos/
         // https://github.com/mrdoob/three.js/blob/dev/examples/jsm/libs/dat.gui.module.js
         gui = new dat.GUI({height : 5 * 32 - 1});
-        // galactic.userData.plane.visible = false;
         gui.add(galactic.userData.plane, "visible").name("Galactic plane")
         gui.add(ecliptic.userData.plane, "visible").name("Ecliptic plane (heliocentric)")
         equatorial.userData.plane.visible = false;
         gui.add(equatorial.userData.plane, "visible").name("Equatorial plane (geocentric)")
-        gui.add(guiParams, "bodyScale").name("Planet scale").min(1).max(1000).step(0.1).onChange((v)=>{
-            console.log("v: "+v);
-            scaleBodies(v);
-            updatePositions()
-        })
-        gui.add({reset: controls.reset}, "reset").name("Reset view")
+        gui.add(guiParams, "bodyScale").name("Planet scale").min(1).max(1000).step(0.1).onChange((v)=>{ scaleBodies(v); })
+        gui.add({reset: resetView}, "reset").name("Reset view")
+        gui.add({to: ()=>toPlanet(sun)}, "to").name("Sol")
+        gui.add({to: ()=>toPlanet(mercury)}, "to").name("Mercury")
+        gui.add({to: ()=>toPlanet(venus)}, "to").name("Venus")
+        gui.add({to: ()=>toPlanet(earth)}, "to").name("Earth")
+        gui.add({to: ()=>toPlanet(moon)}, "to").name("Moon")
+        gui.add({to: ()=>toPlanet(mars)}, "to").name("Mars")
+        gui.add({to: ()=>toPlanet(jupiter)}, "to").name("Jupiter")
+        gui.add({to: ()=>toPlanet(saturn)}, "to").name("Saturn")
+        gui.add({to: ()=>toPlanet(uranus)}, "to").name("Uranus")
+        gui.add({to: ()=>toPlanet(neptune)}, "to").name("Neptune")
+        gui.add({to: ()=>toPlanet(pluto)}, "to").name("Pluto")
 
 
         // animation loop
         function render(time) {
 
+            TWEEN.update();
             controls.update();  // this call prevents labels from jittering when rotating
             renderer.render(scene, camera);
             updateLabelsVisibility();
